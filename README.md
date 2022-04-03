@@ -1,9 +1,3 @@
----
-editor_options: 
-  markdown: 
-    wrap: 72
----
-
 # About
 
 This project is an analysis of the Steam reviews for the [Crusader Kings
@@ -46,6 +40,8 @@ CK3DLCReviews
 
 Contains both downloaded, cleaned-up and prepared for Tableau usage data.
 Initially downloaded data is in json format, processed data is in csv tables. 
+Data that is bigger than 20 MB has been compressed in zip archives.
+Uncompress it before using.
 
 ### data-collection folder
 
