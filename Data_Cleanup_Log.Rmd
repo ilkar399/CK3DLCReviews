@@ -1,0 +1,251 @@
+---
+title: "CK3 Steam Review Data Cleanup Log"
+author: "Mike Kazantsev"
+date: '2022-03-15'
+output: html_document
+---
+
+## Cleaning up and checking datasets
+
+Review datasets were created using Steam API. First I'll check if all reviews up to date were actually downloaded and if there are any reviews with completely empty data (since Steam allows the free format of Review text it's quite possible there are reviews not containing any coherent text, but we'll check it later.
+
+## Loading necessary packages
+
+-   tidyverse
+-   lubridate
+
+```{r loading libraries}
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(pwr)
+library(readr)
+```
+
+## Loading datasets
+
+```{r loading datasets}
+#overall game data
+game_summary <- read_csv("data/steamapps.csv")
+#ck3 review summary and reviews
+ck3_summary <- read_csv("data/summary_1158310.csv")
+ck3_reviews <- read_csv("data/review_1158310.csv", col_types=cols(author.steamid = col_character()), locale = locale(encoding = "windows-1252"))
+#ck3 DLC summary and reviews
+dlc_summary <- read_csv("data/summary_1303182.csv")
+dlc_reviews <- read_csv("data/review_1303182.csv", col_types=cols(author.steamid = col_character()), locale = locale(encoding = "windows-1252"))
+```
+
+## Cleaning up and checking datasets
+
+### Game dataset
+
+```{r}
+str(game_summary)
+```
+
+This dataset doesn't need much work - changing release_date to the proper date format and transforming developers/publishers/categories/genres into the list of strings
+
+```{r cleaning up game summary dataset}
+game_summary_cleaned <- game_summary %>% 
+  mutate(release_date = as.Date(release_date, format = "%d %b, %Y"),
+         developers = strsplit(developers,split='\\|'),
+         publishers = strsplit(publishers,split='\\|'),
+         categories = strsplit(categories,split='\\|'),
+         genres = strsplit(genres,split='\\|')
+         )
+```
+
+### CK3 Base game dataaset
+
+```{r}
+str(ck3_reviews)
+```
+
+Checking if there are reviews that were not downloaded successfully and the positive/negative difference by comparing with summary dataset:
+
+```{r}
+cat("Total reviews: ",ck3_summary$total_reviews,"\n")
+cat("Not downloaded reviews: ", ck3_summary$total_reviews - nrow(ck3_reviews) %>% abs,"\n")
+ck3_missing_positives <- ck3_reviews %>% 
+      filter(voted_up == TRUE) %>% 
+      nrow - ck3_summary$total_positive
+cat("Missing positive reviews: ", ck3_missing_positives %>% abs, "\n")
+ck3_missing_negatives <- ck3_reviews %>% 
+      filter(voted_up == FALSE) %>% 
+      nrow - ck3_summary$total_negative 
+cat("Missing negative reviews: ", ck3_missing_negatives %>% abs, "\n")
+```
+
+The result is acceptable - *only 3 reviews out of 70726* were not downloaded (that could happen as the reviews are downloaded in batches over a period)
+
+Checking for the duplicates by review_id and author.steamid:
+
+```{r}
+cat("Downloaded reviews: ", nrow(ck3_reviews), "\n")
+cat("Unique review authors:", length(unique(ck3_reviews[["author.steamid"]])), "\n")
+cat("Unique reviews (by ID):", length(unique(ck3_reviews[["review_id"]])), "\n")
+cat("Unique review texts:", length(unique(ck3_reviews[["review_text"]])), "\n")
+```
+
+Checking null values:
+
+```{r}
+ck3_reviews %>% summarise(across(everything(), ~ sum(is.na(.))))
+```
+
+Checking how many reviewers didn't have playtime:
+
+```{r}
+cat("Players that don't have playtime:", ck3_reviews %>% 
+      filter(author.playtime_forever < 1) %>% nrow, "\n")
+```
+
+Removing reviews from the same authors, leaving the newest version (Since the review texts are in free form, removing duplicates/empty texts at this stage is not useful as we can use these reviews for analysis anyways). We also change timestamp to the datetime:
+
+```{r}
+ck3_reviews_cleared <- ck3_reviews %>% 
+  group_by(author.steamid) %>% 
+  slice(which.max(timestamp_created)) %>% 
+  mutate(timestamp_created = as.POSIXct(timestamp_created,tz="GMT", origin="1970-01-01"),
+         timestamp_updated = as.POSIXct(timestamp_updated,tz="GMT", origin="1970-01-01"))
+
+cat("Unique review authors", length(unique(ck3_reviews_cleared[["author.steamid"]])), "\n")
+```
+
+### CK3 DLC dataset
+
+```{r}
+str(dlc_reviews)
+```
+
+Checking if there are reviews that were not downloaded successfully and the positive/negative difference by comparing with summary dataset:
+
+```{r}
+cat("Total reviews: ",dlc_summary$total_reviews,"\n")
+cat("Not downloaded reviews: ", dlc_summary$total_reviews - nrow(dlc_reviews) %>% abs,"\n")
+dlc_missing_positives <- dlc_reviews %>% 
+      filter(voted_up == TRUE) %>% 
+      nrow - dlc_summary$total_positive
+cat("Missing positive reviews: ", dlc_missing_positives %>% abs, "\n")
+dlc_missing_negatives <- dlc_reviews %>% 
+      filter(voted_up == FALSE) %>% 
+      nrow - dlc_summary$total_negative 
+cat("Missing negative reviews: ", dlc_missing_negatives %>% abs, "\n")
+```
+
+The result is acceptable - *3 reviews out of 3647* were not downloaded (that could happen as the reviews are downloaded in batches over a period)
+
+Checking for the duplicates by review_id and author.steamid:
+
+```{r}
+cat("Downloaded reviews: ", nrow(dlc_reviews), "\n")
+cat("Unique review authors", length(unique(dlc_reviews[["author.steamid"]])), "\n")
+cat("Unique reviews (by ID)", length(unique(dlc_reviews[["review_id"]])), "\n")
+cat("Unique review texts", length(unique(dlc_reviews[["review_text"]])), "\n")
+```
+
+Steam does not record the playtime for DLC so we can't analyze it.
+
+Removing reviews from the same authors, leaving the newest version (Since the review texts are in free form, removing duplicates/empty texts at this stage is not useful as we can use these reviews for analysis anyways):
+
+```{r}
+dlc_reviews_cleared <- dlc_reviews %>% 
+  group_by(author.steamid) %>% 
+  slice(which.max(timestamp_created)) %>% 
+  mutate(timestamp_created = as.POSIXct(timestamp_created,tz="GMT", origin="1970-01-01"),
+         timestamp_updated = as.POSIXct(timestamp_updated,tz="GMT", origin="1970-01-01"))
+
+cat("Unique review authors", length(unique(dlc_reviews_cleared[["author.steamid"]])), "\n")
+```
+Notice that the review_text is using Unicode bytestring for non-English characters. We need to convert that in case we'll want to analyse non-English reviews. We'll also remove the first nameless column (as it's just the sequential number of the downloaded review) :
+```{r Unicode cleanup}
+#Function is taken from 
+#https://stackoverflow.com/questions/28248457/gsub-in-r-with-unicode-replacement-give-different-results-under-windows-compared?rq=1
+
+trueunicode.hack <- function(string){
+  m <- gregexpr("<U\\+[0-9A-F]{4}>", string)
+  if (is.na(m[[1]][1]))
+    return(string)
+  if(m[[1]][1] == -1)
+    return(string)
+  
+  codes <- unlist(regmatches(string, m))
+  replacements <- codes
+  N <- length(codes)
+  for(i in 1:N){
+    replacements[i] <- intToUtf8(strtoi(paste0("0x", substring(codes[i], 4, 7))))
+  }
+  
+  # if the string doesn't start with a unicode, the copy its initial part
+  # until first occurrence of unicode
+  if(1!=m[[1]][1]){
+    y <- substring(string, 1, m[[1]][1]-1)
+    y <- paste0(y, replacements[1])
+  }else{
+    y <- replacements[1]
+  }
+  
+  # if more than 1 unicodes in the string
+  if(1<N){
+    for(i in 2:N){
+      s <- gsub("<U\\+[0-9A-F]{4}>", replacements[i], 
+                substring(string, m[[1]][i-1]+8, m[[1]][i]+7))
+      Encoding(s) <- "UTF-8"
+      y <- paste0(y, s)
+    }
+  }
+  
+  # get the trailing contents, if any
+  if( nchar(string)>(m[[1]][N]+8) )
+    y <- paste0( y, substring(string, m[[1]][N]+8, nchar(string)) )
+  y
+}
+
+ck3_reviews_cleared <- ck3_reviews_cleared %>% 
+  mutate("review_text" = str_conv(review_text, "UTF-8")) %>% 
+  mutate("review_text" = trueunicode.hack(review_text)) %>% 
+  select(-1) %>% 
+  ungroup()
+  
+dlc_reviews_cleared <- dlc_reviews_cleared %>% 
+  mutate("review_text" = str_conv(review_text, "UTF-8")) %>% 
+  mutate("review_text" = trueunicode.hack(review_text)) %>% 
+  select(-1) %>% 
+  ungroup()
+```
+
+
+## Conclusion
+
+Overall, datasets don't seem to have a lot of null/empty data amd the duplicates were removed.
+
+Owner estimations (Source [steamdb.info](https://steamdb.info) and [SteamSpy](https://steamspy.com/)):
+
+| Application | SteamSpy Owner Estimation | Review Owner Estimation | Reviews count |
+|------|------|------|------|
+|Crusader Kings III | 2000000-5000000 |  14100000-38900000  | 70723 |
+|Crusader Kings III: Royal Court| 0-20000 | 72700-200000 | 3644 |
+
+The real sales data is sadly not available and the owner estimations are rather vague to make a solid conclusion on the margin of errors, but using the SteamSpy Owner Estimation:
+```{r}
+#Confidence Level is set to the 95%
+z <- 1.96
+#Proportion percentage is set to the 50% for the unknown data
+p <- 0.5
+#Population size is estimated at max SteamSpy
+ck3_popsize <- 5000000
+dlc_popsize <- 20000
+moe_ck3 <- z*sqrt(p*(1-p))/sqrt((ck3_popsize-1)*nrow(ck3_reviews_cleared)/(ck3_popsize - nrow(ck3_reviews_cleared)))
+sprintf("Margin of error for CK3 review dataset: %0.4f%%", moe_ck3*100)
+moe_dlc <- z*sqrt(p*(1-p))/sqrt((dlc_popsize-1)*nrow(dlc_reviews_cleared)/(dlc_popsize - nrow(dlc_reviews_cleared)))
+sprintf("Margin of error for Royal Court review dataset: %0.4f%%", moe_dlc*100)
+
+```
+Saving the resulting datasets:
+``` {r}
+#For Windows, R 4.2.0+ is advised, otherwise UTF encoding might break
+ck3_reviews_cleared %>%
+   write.csv(paste0(c("data/ck3_reviews_cleared",".csv"), collapse=""), fileEncoding = "UTF-8")
+dlc_reviews_cleared %>%
+  write.csv(paste0(c("data/dlc_reviews_cleared",".csv"), collapse=""), fileEncoding = "UTF-8")
+```
